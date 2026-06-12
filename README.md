@@ -1,7 +1,5 @@
 # lulu-watchdog
 
-🇵🇱 [Wersja polska](README.pl.md)
-
 Keeps the GUI app of the [LuLu](https://objective-see.org/products/lulu.html) firewall (by Objective-See) alive so new-connection alerts are never silently missed.
 
 ## Problem
