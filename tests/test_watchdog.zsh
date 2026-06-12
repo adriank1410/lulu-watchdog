@@ -34,6 +34,7 @@ base_seds=(
   -e "s,^log_file=.*,log_file=\"$TDIR/test.log\","
   -e "s,^state_dir=.*,state_dir=\"$TDIR\","
   -e 's,^agent_label=.*,agent_label="com.test.fake-lulu-watchdog",'
+  -e 's,^notify_enabled=.*,notify_enabled=0,'
 )
 # Detection that never matches any real process
 broken_detect=(
@@ -53,7 +54,8 @@ mkcopy() {
 
 reset_sandbox() {
   # (N) null_glob qualifier: an empty glob must not abort the rm (zsh NOMATCH)
-  /bin/rm -f "$TDIR/test.log" "$TDIR"/test.log.*(N) "$TDIR/app-missing-count"
+  /bin/rm -f "$TDIR/test.log" "$TDIR"/test.log.*(N) "$TDIR/app-missing-count" \
+             "$TDIR/last-seen-running"
 }
 
 log_count() {
@@ -121,13 +123,33 @@ fi
 # --- Test 5: relaunch confirmed with PID ------------------------------------
 reset_sandbox
 mkcopy "$TDIR/t5.zsh" "${match_detect[@]}" \
-                      -e 's,^lulu_running && exit 0$,false \&\& exit 0,' \
+                      -e 's,^lulu_running && .*,:,' \
                       -e 's,^/usr/bin/open .*,/usr/bin/true,'
 zsh "$TDIR/t5.zsh"
 if grep -Eq 'relaunch confirmed after [0-9]+s \(PID [0-9]+\)' "$TDIR/test.log"; then
   pass "relaunch confirmed with PID"
 else
   fail "relaunch confirmed with PID"
+fi
+
+# --- Test 5b: fresh seen-marker -> notification branch taken ----------------
+reset_sandbox
+: > "$TDIR/last-seen-running"
+zsh "$TDIR/t5.zsh"
+if grep -q 'relaunch confirmed' "$TDIR/test.log" \
+   && ! grep -q 'notification suppressed' "$TDIR/test.log"; then
+  pass "fresh marker: notification branch taken (not suppressed)"
+else
+  fail "fresh marker: notification branch taken (not suppressed)"
+fi
+
+# --- Test 5c: stale/no seen-marker -> notification suppressed ---------------
+reset_sandbox
+zsh "$TDIR/t5.zsh"
+if grep -q 'notification suppressed' "$TDIR/test.log"; then
+  pass "no marker: notification suppressed"
+else
+  fail "no marker: notification suppressed"
 fi
 
 # --- Test 6: log rotation ----------------------------------------------------

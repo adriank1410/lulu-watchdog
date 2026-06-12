@@ -16,6 +16,26 @@ LuLu's network extension keeps enforcing **existing** rules even when the GUI ap
 6. **Auto-re-enables at next login** — `RunAtLoad: true` in the plist restarts the agent after each login.
 7. **Rotates its log at 256 KB**, keeping 3 rotated files.
 8. **Robust process detection** — an anchored `pgrep -f` pattern that tolerates CLI arguments, plus a `pgrep -x` fallback for app-translocation paths, both scoped to the current user (`-u $UID`) so another user's LuLu process under fast user switching does not mask the absence.
+9. **macOS notifications** with sounds — localized to Polish or English based on the system locale; at most one notification per outage episode (a freshness marker both prevents spam on repeated failures and silences the login race where the watchdog's first tick fires before LuLu's own login item).
+
+### Notifications
+
+| Event | English | Polski | Sound |
+|---|---|---|---|
+| Relaunched | LuLu had quit — relaunched (PID …) | LuLu zamknęło się — uruchomiono ponownie (PID …) | Glass |
+| `open` failed | LuLu quit and the relaunch failed (open exit …) | LuLu zamknęło się, a ponowne uruchomienie nie powiodło się (open: kod …) | Basso |
+| Relaunch unconfirmed | LuLu quit and the relaunch was not confirmed — check it manually | LuLu zamknęło się, a ponowne uruchomienie nie zostało potwierdzone — sprawdź ręcznie | Basso |
+| Watchdog self-disabled | LuLu app is still missing — watchdog disabled until next login | Aplikacji LuLu wciąż brak — watchdog wyłączony do następnego logowania | Basso |
+
+Notifications are posted via `osascript` — if they do not appear, allow notifications from **Script Editor** in System Settings → Notifications. To force a language for the agent, add to the plist and re-run `./install.sh`:
+
+```xml
+<key>EnvironmentVariables</key>
+<dict>
+    <key>LULU_WATCHDOG_LANG</key>
+    <string>en</string>  <!-- or "pl" -->
+</dict>
+```
 
 ## Design notes
 
@@ -83,6 +103,8 @@ Edit the constants at the top of `lulu-watchdog.zsh`, then re-run `./install.sh`
 | `max_rotated_logs` | `3` | Number of rotated log files to keep |
 | `max_app_missing_checks` | `20` | Consecutive "missing" ticks before self-disable (20 × 30 s = 10 min) |
 | `launch_confirm_timeout` | `10` | Seconds to wait for relaunch confirmation |
+| `notify_enabled` | `1` | Set to `0` to disable macOS notifications |
+| `notify_fresh_seconds` | `45` | Notify only if LuLu was seen running this recently (anti-spam / login-race guard); keep between one and two ticks |
 | `StartInterval` | `30` | Seconds between ticks (set in the plist, not the script) |
 
 ## Files
