@@ -6,11 +6,12 @@
   <key>Label</key>
   <string>com.local.lulu-watchdog</string>
 
-  <!-- __HOME__ is replaced with the user's home directory by install.sh -->
+  <!-- __HOME__ is replaced with the user's home directory by install.sh.
+       The script is executed directly (not via "zsh script") so that
+       System Settings > Login Items shows "lulu-watchdog", not "zsh". -->
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/zsh</string>
-    <string>__HOME__/Library/Application Support/LuLuWatchdog/lulu-watchdog.zsh</string>
+    <string>__HOME__/Library/Application Support/LuLuWatchdog/lulu-watchdog</string>
   </array>
 
   <key>RunAtLoad</key>

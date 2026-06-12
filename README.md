@@ -91,9 +91,11 @@ Edit the constants at the top of `lulu-watchdog.zsh`, then re-run `./install.sh`
 
 | Repo file | Installed to |
 |---|---|
-| `lulu-watchdog.zsh` | `~/Library/Application Support/LuLuWatchdog/lulu-watchdog.zsh` |
+| `lulu-watchdog.zsh` | `~/Library/Application Support/LuLuWatchdog/lulu-watchdog` |
 | `com.local.lulu-watchdog.plist` | `~/Library/LaunchAgents/com.local.lulu-watchdog.plist` |
 | *(generated at runtime)* | `~/Library/Logs/LuLuWatchdog.log` |
+
+The script is installed without the `.zsh` extension and executed directly by launchd (not as `zsh script.zsh`) — this way **System Settings → General → Login Items** lists the agent as `lulu-watchdog` instead of an anonymous `zsh`.
 
 ## Tests
 

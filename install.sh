@@ -11,7 +11,9 @@ set -euo pipefail
 SCRIPT_DIR="${0:A:h}"
 LABEL="com.local.lulu-watchdog"
 DEST_DIR="$HOME/Library/Application Support/LuLuWatchdog"
-DEST_SCRIPT="$DEST_DIR/lulu-watchdog.zsh"
+# Installed without the .zsh extension and executed directly by launchd —
+# System Settings > Login Items then shows "lulu-watchdog" instead of "zsh"
+DEST_SCRIPT="$DEST_DIR/lulu-watchdog"
 DEST_PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 LOG_FILE="$HOME/Library/Logs/LuLuWatchdog.log"
 
@@ -46,6 +48,9 @@ launchctl bootout "gui/$UID/$LABEL" 2>/dev/null || true
 launchctl unload "$DEST_PLIST" 2>/dev/null || true
 
 mkdir -p "$DEST_DIR" "$(dirname "$DEST_PLIST")"
+
+# Clean up the legacy install name (script used to be installed as *.zsh)
+rm -f "$DEST_DIR/lulu-watchdog.zsh"
 
 cp "$SCRIPT_DIR/lulu-watchdog.zsh" "$DEST_SCRIPT"
 chmod 700 "$DEST_SCRIPT"

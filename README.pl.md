@@ -91,9 +91,11 @@ Edytuj stałe na początku pliku `lulu-watchdog.zsh`, a następnie uruchom ponow
 
 | Plik w repozytorium | Zainstalowany w |
 |---|---|
-| `lulu-watchdog.zsh` | `~/Library/Application Support/LuLuWatchdog/lulu-watchdog.zsh` |
+| `lulu-watchdog.zsh` | `~/Library/Application Support/LuLuWatchdog/lulu-watchdog` |
 | `com.local.lulu-watchdog.plist` | `~/Library/LaunchAgents/com.local.lulu-watchdog.plist` |
 | *(generowany w trakcie działania)* | `~/Library/Logs/LuLuWatchdog.log` |
+
+Skrypt jest instalowany bez rozszerzenia `.zsh` i wykonywany przez launchd bezpośrednio (a nie jako `zsh skrypt.zsh`) — dzięki temu **Ustawienia systemowe → Ogólne → Elementy logowania** pokazują agenta jako `lulu-watchdog`, a nie anonimowe `zsh`.
 
 ## Testy
 
