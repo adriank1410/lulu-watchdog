@@ -12,7 +12,6 @@ umask 077
 
 app_path="/Applications/LuLu.app"
 lulu_executable="${app_path}/Contents/MacOS/LuLu"
-lulu_process_pattern='^/Applications/LuLu\.app/Contents/MacOS/LuLu( |$)'
 log_file="${HOME}/Library/Logs/LuLuWatchdog.log"
 state_dir="${HOME}/Library/Application Support/LuLuWatchdog"
 miss_count_file="${state_dir}/app-missing-count"
@@ -33,6 +32,16 @@ notify_enabled=1
 # longer than one StartInterval tick and shorter than two.
 notify_fresh_seconds=45
 seen_marker_file="${state_dir}/last-seen-running"
+
+build_lulu_process_pattern() {
+  emulate -L zsh
+  setopt extendedglob
+  local escaped_executable="$lulu_executable"
+  escaped_executable="${escaped_executable//(#m)[\\.\[\]\(\)\{\}\+\*\?\^\$\|]/\\$MATCH}"
+  lulu_process_pattern="^${escaped_executable}( |$)"
+}
+
+build_lulu_process_pattern
 
 ensure_datetime_module() {
   (( $+builtins[strftime] && $+parameters[EPOCHSECONDS] )) && return 0

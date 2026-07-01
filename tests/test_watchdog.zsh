@@ -62,6 +62,10 @@ log_count() {
   grep -c "$1" "$TDIR/test.log" 2>/dev/null || true
 }
 
+run_watchdog() {
+  zsh -f "$1"
+}
+
 # --- Test 0: syntax and plist lint -----------------------------------------
 if zsh -n "$SRC" && zsh -n "$REPO_DIR/install.sh" && zsh -n "$REPO_DIR/uninstall.sh"; then
   pass "zsh -n syntax on all scripts"
@@ -78,7 +82,7 @@ fi
 reset_sandbox
 mkcopy "$TDIR/t1.zsh" -e "s,^app_path=.*,app_path=\"$TDIR/NoSuchApp.app\"," \
                       -e 's,^max_app_missing_checks=.*,max_app_missing_checks=3,'
-zsh "$TDIR/t1.zsh"; zsh "$TDIR/t1.zsh"; zsh "$TDIR/t1.zsh"
+run_watchdog "$TDIR/t1.zsh"; run_watchdog "$TDIR/t1.zsh"; run_watchdog "$TDIR/t1.zsh"
 if [[ "$(cat "$TDIR/app-missing-count" 2>/dev/null)" == "3" ]] \
    && [[ "$(log_count 'missing at')" == "1" ]] \
    && [[ "$(log_count 'disabling watchdog')" == "1" ]]; then
@@ -91,7 +95,7 @@ fi
 reset_sandbox
 print "7" > "$TDIR/app-missing-count"
 mkcopy "$TDIR/t2.zsh" "${match_detect[@]}"
-zsh "$TDIR/t2.zsh"
+run_watchdog "$TDIR/t2.zsh"
 if [[ ! -f "$TDIR/app-missing-count" ]] && [[ "$(log_count 'present again')" == "1" ]]; then
   pass "app present again: counter removed and reset logged"
 else
@@ -107,7 +111,7 @@ print '[[ " $* " == *" -x LuLu "* ]] && exit 0' >> "$fake_pgrep"
 print 'exit 1' >> "$fake_pgrep"
 chmod +x "$fake_pgrep"
 mkcopy "$TDIR/t2b.zsh" -e "s,/usr/bin/pgrep,$fake_pgrep,g"
-PGREP_CALL_LOG="$TDIR/pgrep.calls" zsh "$TDIR/t2b.zsh"
+PGREP_CALL_LOG="$TDIR/pgrep.calls" run_watchdog "$TDIR/t2b.zsh"
 pgrep_call_count=$(wc -l < "$TDIR/pgrep.calls" | tr -d ' ')
 if [[ "$pgrep_call_count" == "1" ]] \
    && grep -q -- '-x LuLu' "$TDIR/pgrep.calls" \
@@ -117,10 +121,28 @@ else
   fail "running process: exact pgrep match avoids fallback"
 fi
 
+# --- Test 2c: fallback pgrep uses patched app path --------------------------
+reset_sandbox
+fake_pgrep="$TDIR/fake-pgrep-derived-path"
+print '#!/bin/zsh' > "$fake_pgrep"
+print 'print -r -- "$*" >> "$PGREP_CALL_LOG"' >> "$fake_pgrep"
+print '[[ " $* " == *" -f "* && " $* " == *"$FAKE_LULU_PATTERN"* ]] && exit 0' >> "$fake_pgrep"
+print 'exit 1' >> "$fake_pgrep"
+chmod +x "$fake_pgrep"
+mkcopy "$TDIR/t2c.zsh" -e "s,/usr/bin/pgrep,$fake_pgrep,g"
+fake_lulu_pattern="${TDIR//./\\.}/FakeLuLu\\.app/Contents/MacOS/LuLu"
+PGREP_CALL_LOG="$TDIR/pgrep-derived.calls" FAKE_LULU_PATTERN="$fake_lulu_pattern" \
+  run_watchdog "$TDIR/t2c.zsh"
+if grep -Fq -- "$fake_lulu_pattern" "$TDIR/pgrep-derived.calls"; then
+  pass "fallback pgrep uses patched app path"
+else
+  fail "fallback pgrep uses patched app path"
+fi
+
 # --- Test 3: open fails -> exit code logged ---------------------------------
 reset_sandbox
 mkcopy "$TDIR/t3.zsh" "${broken_detect[@]}" -e 's,^/usr/bin/open .*,/usr/bin/false,'
-zsh "$TDIR/t3.zsh"
+run_watchdog "$TDIR/t3.zsh"
 if [[ "$(log_count 'open failed (exit 1)')" == "1" ]]; then
   pass "open failure logged with exit code"
 else
@@ -132,7 +154,7 @@ reset_sandbox
 mkcopy "$TDIR/t4.zsh" "${broken_detect[@]}" \
                       -e 's,^/usr/bin/open .*,/usr/bin/true,' \
                       -e 's,^launch_confirm_timeout=.*,launch_confirm_timeout=2,'
-zsh "$TDIR/t4.zsh"
+run_watchdog "$TDIR/t4.zsh"
 if [[ "$(log_count 'NOT confirmed within 2s')" == "1" ]]; then
   pass "relaunch timeout logged"
 else
@@ -144,7 +166,7 @@ reset_sandbox
 mkcopy "$TDIR/t5.zsh" "${match_detect[@]}" \
                       -e 's,^lulu_running && .*,:,' \
                       -e 's,^/usr/bin/open .*,/usr/bin/true,'
-zsh "$TDIR/t5.zsh"
+run_watchdog "$TDIR/t5.zsh"
 if grep -Eq 'relaunch confirmed after [0-9]+s \(PID [0-9]+\)' "$TDIR/test.log"; then
   pass "relaunch confirmed with PID"
 else
@@ -162,7 +184,7 @@ mkcopy "$TDIR/t5a.zsh" -e "s,/usr/bin/pgrep,$fake_pgrep,g" \
                        -e 's,^lulu_running && .*,:,g' \
                        -e 's,^/usr/bin/open .*,/usr/bin/true,' \
                        -e 's,^launch_confirm_timeout=.*,launch_confirm_timeout=1,'
-zsh "$TDIR/t5a.zsh"
+run_watchdog "$TDIR/t5a.zsh"
 if grep -q 'relaunch confirmed after 1s (PID unknown)' "$TDIR/test.log"; then
   pass "relaunch fallback match confirms without exact PID"
 else
@@ -172,7 +194,7 @@ fi
 # --- Test 5b: fresh seen-marker -> notification branch taken ----------------
 reset_sandbox
 : > "$TDIR/last-seen-running"
-zsh "$TDIR/t5.zsh"
+run_watchdog "$TDIR/t5.zsh"
 if grep -q 'relaunch confirmed' "$TDIR/test.log" \
    && ! grep -q 'notification suppressed' "$TDIR/test.log"; then
   pass "fresh marker: notification branch taken (not suppressed)"
@@ -188,7 +210,7 @@ mkcopy "$TDIR/t5c.zsh" "${match_detect[@]}" \
                       -e 's,^/usr/bin/open .*,/usr/bin/true,' \
                       -e 's,zmodload -F zsh/datetime b:strftime p:EPOCHSECONDS 2>/dev/null,/usr/bin/false,' \
                       -e 's,zmodload -F zsh/stat b:zstat 2>/dev/null,/usr/bin/false,'
-zsh "$TDIR/t5c.zsh"
+run_watchdog "$TDIR/t5c.zsh"
 if grep -q 'relaunch confirmed' "$TDIR/test.log" \
    && ! grep -q 'notification suppressed' "$TDIR/test.log"; then
   pass "date/stat module fallback keeps fresh marker behavior"
@@ -198,7 +220,7 @@ fi
 
 # --- Test 5d: stale/no seen-marker -> notification suppressed ---------------
 reset_sandbox
-zsh "$TDIR/t5.zsh"
+run_watchdog "$TDIR/t5.zsh"
 if grep -q 'notification suppressed' "$TDIR/test.log"; then
   pass "no marker: notification suppressed"
 else
@@ -210,7 +232,7 @@ reset_sandbox
 print "7" > "$TDIR/app-missing-count"
 /usr/bin/head -c 200 /dev/zero | tr '\0' 'x' > "$TDIR/test.log"
 mkcopy "$TDIR/t6.zsh" "${match_detect[@]}" -e 's,^max_log_bytes=.*,max_log_bytes=100,'
-zsh "$TDIR/t6.zsh"
+run_watchdog "$TDIR/t6.zsh"
 if [[ -f "$TDIR/test.log.1" ]] && [[ "$(log_count 'present again')" == "1" ]]; then
   pass "log rotation at size threshold"
 else
