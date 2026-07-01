@@ -98,6 +98,25 @@ else
   fail "app present again: counter removed and reset logged"
 fi
 
+# --- Test 2b: exact process match avoids fallback pgrep ---------------------
+reset_sandbox
+fake_pgrep="$TDIR/fake-pgrep"
+print '#!/bin/zsh' > "$fake_pgrep"
+print 'print -r -- "$*" >> "$PGREP_CALL_LOG"' >> "$fake_pgrep"
+print '[[ " $* " == *" -x LuLu "* ]] && exit 0' >> "$fake_pgrep"
+print 'exit 1' >> "$fake_pgrep"
+chmod +x "$fake_pgrep"
+mkcopy "$TDIR/t2b.zsh" -e "s,/usr/bin/pgrep,$fake_pgrep,g"
+PGREP_CALL_LOG="$TDIR/pgrep.calls" zsh "$TDIR/t2b.zsh"
+pgrep_call_count=$(wc -l < "$TDIR/pgrep.calls" | tr -d ' ')
+if [[ "$pgrep_call_count" == "1" ]] \
+   && grep -q -- '-x LuLu' "$TDIR/pgrep.calls" \
+   && ! grep -q -- '-f ' "$TDIR/pgrep.calls"; then
+  pass "running process: exact pgrep match avoids fallback"
+else
+  fail "running process: exact pgrep match avoids fallback"
+fi
+
 # --- Test 3: open fails -> exit code logged ---------------------------------
 reset_sandbox
 mkcopy "$TDIR/t3.zsh" "${broken_detect[@]}" -e 's,^/usr/bin/open .*,/usr/bin/false,'
@@ -132,6 +151,24 @@ else
   fail "relaunch confirmed with PID"
 fi
 
+# --- Test 5a: relaunch fallback match confirms without exact PID -------------
+reset_sandbox
+fake_pgrep="$TDIR/fake-pgrep-fallback"
+print '#!/bin/zsh' > "$fake_pgrep"
+print '[[ " $* " == *" -f "* ]] && exit 0' >> "$fake_pgrep"
+print 'exit 1' >> "$fake_pgrep"
+chmod +x "$fake_pgrep"
+mkcopy "$TDIR/t5a.zsh" -e "s,/usr/bin/pgrep,$fake_pgrep,g" \
+                       -e 's,^lulu_running && .*,:,g' \
+                       -e 's,^/usr/bin/open .*,/usr/bin/true,' \
+                       -e 's,^launch_confirm_timeout=.*,launch_confirm_timeout=1,'
+zsh "$TDIR/t5a.zsh"
+if grep -q 'relaunch confirmed after 1s (PID unknown)' "$TDIR/test.log"; then
+  pass "relaunch fallback match confirms without exact PID"
+else
+  fail "relaunch fallback match confirms without exact PID"
+fi
+
 # --- Test 5b: fresh seen-marker -> notification branch taken ----------------
 reset_sandbox
 : > "$TDIR/last-seen-running"
@@ -143,7 +180,23 @@ else
   fail "fresh marker: notification branch taken (not suppressed)"
 fi
 
-# --- Test 5c: stale/no seen-marker -> notification suppressed ---------------
+# --- Test 5c: date/stat module fallback keeps fresh-marker behavior ----------
+reset_sandbox
+: > "$TDIR/last-seen-running"
+mkcopy "$TDIR/t5c.zsh" "${match_detect[@]}" \
+                      -e 's,^lulu_running && .*,:,g' \
+                      -e 's,^/usr/bin/open .*,/usr/bin/true,' \
+                      -e 's,zmodload -F zsh/datetime b:strftime p:EPOCHSECONDS 2>/dev/null,/usr/bin/false,' \
+                      -e 's,zmodload -F zsh/stat b:zstat 2>/dev/null,/usr/bin/false,'
+zsh "$TDIR/t5c.zsh"
+if grep -q 'relaunch confirmed' "$TDIR/test.log" \
+   && ! grep -q 'notification suppressed' "$TDIR/test.log"; then
+  pass "date/stat module fallback keeps fresh marker behavior"
+else
+  fail "date/stat module fallback keeps fresh marker behavior"
+fi
+
+# --- Test 5d: stale/no seen-marker -> notification suppressed ---------------
 reset_sandbox
 zsh "$TDIR/t5.zsh"
 if grep -q 'notification suppressed' "$TDIR/test.log"; then

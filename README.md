@@ -8,7 +8,7 @@ LuLu's network extension keeps enforcing **existing** rules even when the GUI ap
 
 ## What it does
 
-1. **Checks every 30 seconds** — a LaunchAgent fires one zsh invocation and one `pgrep`, taking a few milliseconds of CPU and zero resident memory between ticks.
+1. **Checks every 30 seconds** — a LaunchAgent fires one zsh invocation and normally one `pgrep` (with a second `pgrep` only for the unusual fallback path), taking a few milliseconds of CPU and zero resident memory between ticks.
 2. **Relaunches LuLu hidden in the background** — uses `open -gj -a LuLu.app` so the app appears without stealing focus.
 3. **Confirms the relaunch within 10 seconds** — polls until the process is visible, then logs the PID.
 4. **Logs open failures with their exit code** — the next 30-second tick is the automatic retry.
