@@ -33,15 +33,45 @@ notify_enabled=1
 notify_fresh_seconds=45
 seen_marker_file="${state_dir}/last-seen-running"
 
+build_lulu_process_pattern() {
+  emulate -L zsh
+  setopt extendedglob
+  local escaped_executable="$lulu_executable"
+  escaped_executable="${escaped_executable//(#m)[\\.\[\]\(\)\{\}\+\*\?\^\$\|]/\\$MATCH}"
+  lulu_process_pattern="^${escaped_executable}( |$)"
+}
+
+build_lulu_process_pattern
+
+ensure_datetime_module() {
+  (( $+builtins[strftime] && $+parameters[EPOCHSECONDS] )) && return 0
+  zmodload -F zsh/datetime b:strftime p:EPOCHSECONDS 2>/dev/null
+}
+
+ensure_stat_module() {
+  (( $+builtins[zstat] )) && return 0
+  zmodload -F zsh/stat b:zstat 2>/dev/null
+}
+
 timestamp() {
-  /bin/date "+%Y-%m-%d %H:%M:%S"
+  if ensure_datetime_module; then
+    strftime "%Y-%m-%d %H:%M:%S" "$EPOCHSECONDS"
+  else
+    /bin/date "+%Y-%m-%d %H:%M:%S"
+  fi
 }
 
 rotate_log_if_needed() {
   [[ -f "$log_file" ]] || return 0
 
   local log_size
-  log_size=$(/usr/bin/stat -f "%z" "$log_file" 2>/dev/null) || return 0
+  if ensure_stat_module; then
+    local -a stat_result
+    zstat -A stat_result +size "$log_file" 2>/dev/null || return 0
+    log_size="$stat_result[1]"
+  else
+    log_size=$(/usr/bin/stat -f "%z" "$log_file" 2>/dev/null) || return 0
+  fi
   (( log_size < max_log_bytes )) && return 0
 
   local index next_index rotated_file next_file
@@ -69,20 +99,32 @@ log_message() {
   print -r -- "$(timestamp) $1" >> "$log_file"
 }
 
-# "( |$)" anchor instead of "$": survives LuLu being started with a CLI
-# argument. Fallback pgrep -x: survives a start from an unusual path (e.g.
-# app translocation). -u $UID: another user's LuLu (fast user switching)
-# does not count as running in this session. A false "not running" is cheap:
-# open -a on an already-running app does not spawn a second instance.
+# Exact process-name match first: it is the common path and also survives a
+# start from an unusual path (e.g. app translocation). The anchored -f fallback
+# still covers a LuLu process whose executable path is visible but whose process
+# name is not exactly "LuLu"; "( |$)" instead of "$" survives CLI arguments.
+# -u $UID: another user's LuLu (fast user switching) does not count as running
+# in this session. A false "not running" is cheap: open -a on an already-running
+# app does not spawn a second instance.
 lulu_running() {
-  /usr/bin/pgrep -u "$UID" -f '^/Applications/LuLu\.app/Contents/MacOS/LuLu( |$)' >/dev/null 2>&1 && return 0
-  /usr/bin/pgrep -u "$UID" -x "LuLu" >/dev/null 2>&1
+  /usr/bin/pgrep -u "$UID" -x "LuLu" >/dev/null 2>&1 && return 0
+  /usr/bin/pgrep -u "$UID" -f "$lulu_process_pattern" >/dev/null 2>&1
 }
 
 recently_seen_running() {
   local marker_mtime now_epoch
-  marker_mtime=$(/usr/bin/stat -f "%m" "$seen_marker_file" 2>/dev/null) || return 1
-  now_epoch=$(/bin/date +%s)
+  if ensure_stat_module; then
+    local -a stat_result
+    zstat -A stat_result +mtime "$seen_marker_file" 2>/dev/null || return 1
+    marker_mtime="$stat_result[1]"
+  else
+    marker_mtime=$(/usr/bin/stat -f "%m" "$seen_marker_file" 2>/dev/null) || return 1
+  fi
+  if ensure_datetime_module; then
+    now_epoch="$EPOCHSECONDS"
+  else
+    now_epoch=$(/bin/date +%s)
+  fi
   (( now_epoch - marker_mtime <= notify_fresh_seconds ))
 }
 
@@ -158,8 +200,8 @@ waited=0
 while (( waited < launch_confirm_timeout )); do
   /bin/sleep 1
   waited=$(( waited + 1 ))
-  if lulu_running; then
-    lulu_pids=($(/usr/bin/pgrep -u "$UID" -x "LuLu" 2>/dev/null))
+  lulu_pids=($(/usr/bin/pgrep -u "$UID" -x "LuLu" 2>/dev/null))
+  if (( ${#lulu_pids} > 0 )) || /usr/bin/pgrep -u "$UID" -f "$lulu_process_pattern" >/dev/null 2>&1; then
     log_message "relaunch confirmed after ${waited}s (PID ${lulu_pids[1]:-unknown})"
     if (( episode_fresh )); then
       notify "LuLu had quit — relaunched (PID ${lulu_pids[1]:-?})" \
