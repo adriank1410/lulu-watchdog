@@ -2,10 +2,12 @@
 #
 # Test suite for lulu-watchdog.zsh. Runs sandboxed copies of the script with
 # substituted paths — does not require LuLu to be installed or running, and
-# never touches the real agent (uses a fake launchd label).
-# Usage: zsh tests/test_watchdog.zsh
+# never calls the real launchctl, open, or osascript.
+# Usage: zsh -f tests/test_watchdog.zsh
 
 set -u
+# Avoid zsh trying to renice the fixture process inside a restricted sandbox.
+unsetopt BG_NICE
 
 REPO_DIR="${0:A:h:h}"
 SRC="$REPO_DIR/lulu-watchdog.zsh"
@@ -27,7 +29,28 @@ chmod +x "$TDIR/FakeLuLu.app/Contents/MacOS/LuLu"
 # executed from /tmp.)
 /bin/sleep 29631 &
 sleeper_pid=$!
-trap '/bin/kill "$sleeper_pid" 2>/dev/null; /bin/rm -rf "$TDIR"' EXIT
+trap '/bin/kill "$sleeper_pid" 2>/dev/null; wait "$sleeper_pid" 2>/dev/null; /bin/rm -rf "$TDIR"' EXIT
+
+if ! /usr/bin/pgrep -u "$UID" -f 'sleep 29631' | grep -qx "$sleeper_pid"; then
+  print -u2 'Cannot observe the test process with pgrep; run outside the restricted process sandbox.'
+  exit 1
+fi
+
+# Only external side effects are substituted; watchdog decisions run unchanged.
+export LAUNCHCTL_CALL_LOG="$TDIR/launchctl.calls"
+export NOTIFY_CALL_LOG="$TDIR/notify.calls"
+fake_launchctl="$TDIR/launchctl"
+cat > "$fake_launchctl" <<'STUB'
+#!/bin/zsh -f
+print -r -- "$*" >> "$LAUNCHCTL_CALL_LOG"
+STUB
+fake_osascript="$TDIR/osascript"
+cat > "$fake_osascript" <<'STUB'
+#!/bin/zsh -f
+printf '%s\n' "$@" >> "$NOTIFY_CALL_LOG"
+cat > /dev/null
+STUB
+chmod +x "$fake_launchctl" "$fake_osascript"
 
 base_seds=(
   -e "s,^app_path=.*,app_path=\"$TDIR/FakeLuLu.app\","
@@ -35,27 +58,27 @@ base_seds=(
   -e "s,^state_dir=.*,state_dir=\"$TDIR\","
   -e 's,^agent_label=.*,agent_label="com.test.fake-lulu-watchdog",'
   -e 's,^notify_enabled=.*,notify_enabled=0,'
+  -e "s,/bin/launchctl,$fake_launchctl,g"
+  -e "s,/usr/bin/osascript,$fake_osascript,g"
 )
 # Detection that never matches any real process
 broken_detect=(
-  -e 's,MacOS/LuLu( ,MacOS/LuLuZZZ( ,'
   -e 's,-x "LuLu",-x "LuLuZZZZZ",g'
 )
 # Detection that always matches (the sleeper started above)
 match_detect=(
-  -e 's,MacOS/LuLu( ,MacOS/LuLuZZZ( ,'
-  -e 's,-x "LuLu",-f "sleep 29631",g'
+  -e "s,-x \"LuLu\",-P $$ -f \"sleep 29631\",g"
 )
 
 mkcopy() {
   local out="$1"; shift
-  sed "${base_seds[@]}" "$@" "$SRC" > "$out"
+  sed "${base_seds[@]}" "$@" "$SRC" | sed 's,^/usr/bin/open .*,/usr/bin/false,' > "$out"
 }
 
 reset_sandbox() {
   # (N) null_glob qualifier: an empty glob must not abort the rm (zsh NOMATCH)
   /bin/rm -f "$TDIR/test.log" "$TDIR"/test.log.*(N) "$TDIR/app-missing-count" \
-             "$TDIR/last-seen-running"
+             "$TDIR/last-seen-running" "$LAUNCHCTL_CALL_LOG" "$NOTIFY_CALL_LOG"
 }
 
 log_count() {
@@ -63,7 +86,7 @@ log_count() {
 }
 
 run_watchdog() {
-  zsh -f "$1"
+  zsh -f "$1" || fail "watchdog exited unsuccessfully: ${1:t}"
 }
 
 # --- Test 0: syntax and plist lint -----------------------------------------
@@ -82,13 +105,32 @@ fi
 reset_sandbox
 mkcopy "$TDIR/t1.zsh" -e "s,^app_path=.*,app_path=\"$TDIR/NoSuchApp.app\"," \
                       -e 's,^max_app_missing_checks=.*,max_app_missing_checks=3,'
-run_watchdog "$TDIR/t1.zsh"; run_watchdog "$TDIR/t1.zsh"; run_watchdog "$TDIR/t1.zsh"
+run_watchdog "$TDIR/t1.zsh"; run_watchdog "$TDIR/t1.zsh"
+if [[ ! -e "$LAUNCHCTL_CALL_LOG" ]]; then
+  pass "missing app: no bootout before threshold"
+else
+  fail "missing app: no bootout before threshold"
+fi
+run_watchdog "$TDIR/t1.zsh"
 if [[ "$(cat "$TDIR/app-missing-count" 2>/dev/null)" == "3" ]] \
    && [[ "$(log_count 'missing at')" == "1" ]] \
    && [[ "$(log_count 'disabling watchdog')" == "1" ]]; then
   pass "missing app: counter=3, logged once, disable threshold logged once"
 else
   fail "missing app: counter=3, logged once, disable threshold logged once"
+fi
+
+if [[ "$(cat "$LAUNCHCTL_CALL_LOG" 2>/dev/null)" == "bootout gui/$UID/com.test.fake-lulu-watchdog" ]]; then
+  pass "missing app: bootout current user at threshold"
+else
+  fail "missing app: bootout current user at threshold"
+fi
+run_watchdog "$TDIR/t1.zsh"
+if [[ -f "$LAUNCHCTL_CALL_LOG" ]] && [[ "$(wc -l < "$LAUNCHCTL_CALL_LOG")" -eq 2 ]] \
+   && [[ "$(log_count 'disabling watchdog')" == "1" ]]; then
+  pass "missing app: retry bootout without repeating disable log"
+else
+  fail "missing app: retry bootout without repeating disable log"
 fi
 
 # --- Test 2: app back -> counter reset --------------------------------------
@@ -194,12 +236,15 @@ fi
 # --- Test 5b: fresh seen-marker -> notification branch taken ----------------
 reset_sandbox
 : > "$TDIR/last-seen-running"
-run_watchdog "$TDIR/t5.zsh"
-if grep -q 'relaunch confirmed' "$TDIR/test.log" \
-   && ! grep -q 'notification suppressed' "$TDIR/test.log"; then
-  pass "fresh marker: notification branch taken (not suppressed)"
+mkcopy "$TDIR/t5b.zsh" "${match_detect[@]}" \
+                       -e 's,^lulu_running && .*,:,g' \
+                       -e 's,^/usr/bin/open .*,/usr/bin/true,' \
+                       -e 's,^notify_enabled=.*,notify_enabled=1,'
+LULU_WATCHDOG_LANG=en run_watchdog "$TDIR/t5b.zsh"
+if [[ "$(cat "$NOTIFY_CALL_LOG" 2>/dev/null)" == "-"$'\n'"LuLu had quit — relaunched (PID $sleeper_pid)"$'\n'"Glass" ]]; then
+  pass "fresh marker: English relaunch notification and sound sent once"
 else
-  fail "fresh marker: notification branch taken (not suppressed)"
+  fail "fresh marker: English relaunch notification and sound sent once"
 fi
 
 # --- Test 5c: date/stat module fallback keeps fresh-marker behavior ----------
@@ -208,11 +253,11 @@ reset_sandbox
 mkcopy "$TDIR/t5c.zsh" "${match_detect[@]}" \
                       -e 's,^lulu_running && .*,:,g' \
                       -e 's,^/usr/bin/open .*,/usr/bin/true,' \
+                      -e 's,^notify_enabled=.*,notify_enabled=1,' \
                       -e 's,zmodload -F zsh/datetime b:strftime p:EPOCHSECONDS 2>/dev/null,/usr/bin/false,' \
                       -e 's,zmodload -F zsh/stat b:zstat 2>/dev/null,/usr/bin/false,'
-run_watchdog "$TDIR/t5c.zsh"
-if grep -q 'relaunch confirmed' "$TDIR/test.log" \
-   && ! grep -q 'notification suppressed' "$TDIR/test.log"; then
+LULU_WATCHDOG_LANG=pl run_watchdog "$TDIR/t5c.zsh"
+if [[ "$(cat "$NOTIFY_CALL_LOG" 2>/dev/null)" == "-"$'\n'"LuLu zamknęło się — uruchomiono ponownie (PID $sleeper_pid)"$'\n'"Glass" ]]; then
   pass "date/stat module fallback keeps fresh marker behavior"
 else
   fail "date/stat module fallback keeps fresh marker behavior"
@@ -220,11 +265,31 @@ fi
 
 # --- Test 5d: stale/no seen-marker -> notification suppressed ---------------
 reset_sandbox
-run_watchdog "$TDIR/t5.zsh"
-if grep -q 'notification suppressed' "$TDIR/test.log"; then
+LULU_WATCHDOG_LANG=en run_watchdog "$TDIR/t5b.zsh"
+if [[ ! -e "$NOTIFY_CALL_LOG" ]] && grep -q 'notification suppressed' "$TDIR/test.log"; then
   pass "no marker: notification suppressed"
 else
   fail "no marker: notification suppressed"
+fi
+
+# An existing but stale marker must also suppress the external notification.
+reset_sandbox
+: > "$TDIR/last-seen-running"
+touch -t 200001010000 "$TDIR/last-seen-running"
+LULU_WATCHDOG_LANG=en run_watchdog "$TDIR/t5b.zsh"
+if [[ ! -e "$NOTIFY_CALL_LOG" ]] && grep -q 'notification suppressed' "$TDIR/test.log"; then
+  pass "stale marker: notification suppressed"
+else
+  fail "stale marker: notification suppressed"
+fi
+
+reset_sandbox
+: > "$TDIR/last-seen-running"
+LULU_WATCHDOG_LANG=en run_watchdog "$TDIR/t5.zsh"
+if [[ ! -e "$NOTIFY_CALL_LOG" ]] && grep -q 'relaunch confirmed' "$TDIR/test.log"; then
+  pass "notifications disabled: fresh relaunch sends nothing"
+else
+  fail "notifications disabled: fresh relaunch sends nothing"
 fi
 
 # --- Test 6: log rotation ----------------------------------------------------
