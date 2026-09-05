@@ -119,10 +119,12 @@ The script is installed without the `.zsh` extension and executed directly by la
 
 ## Tests
 
-The test suite runs sandboxed copies of the script with substituted paths. It requires neither LuLu installed nor running, and never touches the real LaunchAgent.
+The test suite runs temporary copies of the script with substituted paths. It requires neither LuLu installed nor running. Calls to `launchctl`, `open`, and `osascript` are replaced at the external boundary; process detection still uses a real temporary `sleep` process and `pgrep`. The suite removes its temporary files and stops that process on exit.
+
+Run on macOS with permission to read the process list. In an agent sandbox that blocks `pgrep`, the suite exits immediately with a diagnostic; rerun the same command with process access. No service installation is needed.
 
 ```bash
-zsh tests/test_watchdog.zsh
+zsh -f tests/test_watchdog.zsh
 ```
 
 ## Requirements
